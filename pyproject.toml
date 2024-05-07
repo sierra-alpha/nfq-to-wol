@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "nfq-to-wol"
+version = "0.1.0"
+description = ""
+authors = ["Shaun Alexander <shaun@sierraalpha.co.nz>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+click = "^8.1.7"
+scapy = "^2.5.0"
+PyYAML = "^6.0.1"
+
+[tool.poetry.dev-dependencies]
+pytest = "^8.2.0"
+black = "^24.4.2"
+pytest-datafiles = "^3.0.0"
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib"
+]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,8 @@
+# Test YAML config file for NFQ to WOL
+
+# List of hosts with their IP addresses and MAC addresses
+hosts:
+  # Used in testing
+  192.168.1.10: "00:11:22:33:44:55"
+  192.168.1.11: "10:11:22:33:44:55"
+  192.168.1.12: "10:11:22:33:44:55"

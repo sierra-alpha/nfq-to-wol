@@ -1,0 +1,10 @@
+# Example YAML config file for NFQ to WOL
+
+# Timeout for ping checks in seconds
+#ping_timeout: 1
+
+# List of hosts with their IP addresses and MAC addresses
+hosts:
+  # Example host 1
+  192.168.1.10: "00:11:22:33:44:55"
+  # Add more hosts as needed
