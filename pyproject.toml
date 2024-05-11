@@ -4,6 +4,9 @@ version = "0.1.0"
 description = ""
 authors = ["Shaun Alexander <shaun@sierraalpha.co.nz>"]
 
+[tool.poetry.scripts]
+nfq-to-wol = "nfq_to_wol.main:main"
+
 [tool.poetry.dependencies]
 python = "^3.10"
 click = "^8.1.7"
