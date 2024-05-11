@@ -111,8 +111,8 @@ service:
 Ensure that the `ExecStart` path matches the installation path of the
 `nfq-to-wol` script.
 
-Limitation
--------
+Limitations
+-----------
 
 Only targeting Linux at this stage, specifically Debian Bookworm.
 Only targeting IpV4 remote hosts at this stage.
