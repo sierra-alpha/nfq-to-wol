@@ -44,9 +44,12 @@ Features
 Installation
 ------------
 
-requires, python, tcpdump (I think that's it).
-Currently just pull this code and run it.
+requires, python, tcpdump  and pipx (I think that's it).
 Currently only targeting Debian Bookworm, mileage my vary for other platforms.
+
+.. code-block:: bash
+   pipx install "git+https://github.com/sierra-alpha/nfq-to-wol"
+
 
 Usage
 -----
