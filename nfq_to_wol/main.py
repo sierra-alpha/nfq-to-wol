@@ -30,7 +30,7 @@ def send_wol(mac_address):
         )
 
     print("Sending WOL, targeting MAC: {}".format(mac_address))
-    send(
+    sendp(
         IP(dst="255.255.255.255")
         / UDP(dport=9)
         / Raw(load=bytes.fromhex("F" * 12 + valid_mac_address * 16))
@@ -38,9 +38,12 @@ def send_wol(mac_address):
 
 
 def packet_handler(ping_timeout, hosts, packet):
-    daddr = packet[IP].dst if IP in packet else None
+    daddr = packet[IP].dst if IP in packet else packet[ARP].pdst if ARP in packet else None
+    print("Searching for {}".format(daddr))
     if daddr and daddr in hosts:
-        if not sr1(IP(dst=daddr), timeout=ping_timeout):
+        ping_result = sr1(IP(dst=daddr), timeout=ping_timeout)
+        print("test_results: {}".format(ping_result))
+        if ping_result is None or ping_result[IP].src != daddr:
             print("Found sleeping daddr: {}".format(daddr))
             send_wol(hosts[daddr])
 
@@ -74,7 +77,10 @@ def main(config_file, ping_timeout):
 
     callback = partial(packet_handler, config_data["ping-timeout"], hosts)
 
-    sniff(filter="ip dst host {}".format(" or ".join(hosts)), prn=callback)
+    sniff_filter = "arp net {hosts} or dst {hosts}".format(hosts = " or ".join(hosts))
+    print("Using filter: {}".format(sniff_filter))
+
+    sniff(filter=sniff_filter, prn=callback)
 
 
 if __name__ == "__main__":
