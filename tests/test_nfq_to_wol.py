@@ -7,7 +7,9 @@ from unittest.mock import patch, ANY
 
 FIXTURE_DIR = Path(__file__).parent.resolve()
 TEST_CONFIG_DATAFILE = pytest.mark.datafiles(FIXTURE_DIR / "test_config.yaml")
-MULTI_HOSTS_CONFIG_DATAFILE = pytest.mark.datafiles(FIXTURE_DIR / "multi_hosts_config.yaml")
+MULTI_HOSTS_CONFIG_DATAFILE = pytest.mark.datafiles(
+    FIXTURE_DIR / "multi_hosts_config.yaml"
+)
 EMPTY_CONFIG_DATAFILE = pytest.mark.datafiles(FIXTURE_DIR / "empty_config.yaml")
 
 
@@ -23,9 +25,11 @@ def test_cli_args_overwrite_config(datafiles):
             result = runner.invoke(
                 main,
                 [
-                    "--config-file", str(datafiles / "test_config.yaml"),
-                    "--ping-timeout", "1",
-                ]
+                    "--config-file",
+                    str(datafiles / "test_config.yaml"),
+                    "--ping-timeout",
+                    "1",
+                ],
             )
 
             # Assert that partial function is called with correct arguments
@@ -34,10 +38,8 @@ def test_cli_args_overwrite_config(datafiles):
             )
 
             # Assert that sniff function is called with correct arguments
-            mock_sniff.assert_called_once_with(
-                filter="ip dst host 192.168.1.10",
-                prn=ANY
-            )
+            mock_sniff.assert_called_once_with(filter="dst net 192.168.1.10", prn=ANY)
+
 
 # Check that we can deal with multi hosts (and default ping timeout of 1)
 @MULTI_HOSTS_CONFIG_DATAFILE
@@ -50,8 +52,9 @@ def test_mulitple_hosts_bpf(datafiles):
             result = runner.invoke(
                 main,
                 [
-                    "--config-file", str(datafiles / "multi_hosts_config.yaml"),
-                ]
+                    "--config-file",
+                    str(datafiles / "multi_hosts_config.yaml"),
+                ],
             )
 
             # Assert that partial function is called with correct arguments
@@ -61,8 +64,7 @@ def test_mulitple_hosts_bpf(datafiles):
 
             # Assert that sniff function is called with correct arguments
             mock_sniff.assert_called_once_with(
-                filter="ip dst host 192.168.1.10 or 192.168.1.11 or 192.168.1.12",
-                prn=ANY
+                filter="dst net 192.168.1.10 or 192.168.1.11 or 192.168.1.12", prn=ANY
             )
 
 
@@ -108,7 +110,8 @@ def test_valid_mac_address(mac):
         send_wol(mac)
 
         mock_send.assert_called_once_with(
-            IP(dst="255.255.255.255")
+            Ether()
+            / IP(dst="255.255.255.255")
             / UDP(dport=9)
             / Raw(
                 load=bytes.fromhex(
@@ -138,10 +141,10 @@ def test_non_ip_packet(datafiles):
     with patch("nfq_to_wol.main.sr1") as mock_sr1:
 
         # Call packet_handler function with a packet
-        packet = Ether() / ICMP() # not an IP packet
+        packet = Ether() / ICMP()  # not an IP packet
         packet_handler(1, test_config["hosts"], packet)
 
-        # Assert that send function is not called
+        # Assert that sr1 function is not called
         assert not mock_sr1.called
 
 
@@ -154,10 +157,10 @@ def test_ip_packet_dst_not_in_hosts(datafiles):
     with patch("nfq_to_wol.main.sr1") as mock_sr1:
 
         # Call packet_handler function with a packet
-        packet = Ether() / IP(dst="192.168.1.12") / TCP(dport=80) # not in host file
+        packet = Ether() / IP(dst="192.168.1.12") / TCP(dport=80)  # not in host file
         packet_handler(1, test_config["hosts"], packet)
 
-        # Assert that send function is not called
+        # Assert that sr1 function is not called
         assert not mock_sr1.called
 
 
@@ -168,13 +171,40 @@ def test_ping_successful(datafiles):
 
     # Mocking sr1 function to simulate successful ping
     with patch("nfq_to_wol.main.sr1") as mock_sr1:
-        mock_sr1.return_value = True  # Simulate successful ping response
+        # Simulate successful ping response
+        mock_sr1.return_value = Ether() / IP(src="192.168.1.10") / ICMP() / "We sent it"
 
         # Mocking send function
         with patch("nfq_to_wol.main.send") as mock_send:
             # Call packet_handler function with a packet
-            packet = Ether() / IP(dst="192.168.1.10") / TCP(dport=80)
+            packet = IP(dst="192.168.1.10") / TCP(dport=80)
             packet_handler(1, test_config["hosts"], packet)
+
+            # Assert that send function is not called
+            assert not mock_send.called
+
+
+# Check if we originated the ping that we ignore it
+@TEST_CONFIG_DATAFILE
+def test_self_originated_packet_ignored(datafiles):
+    test_config = load_config(datafiles / "test_config.yaml")
+
+    # Mocking sr1 function to check it isn't called
+    with patch("nfq_to_wol.main.sr1") as mock_sr1:
+
+        # Mocking send function
+        with patch("nfq_to_wol.main.send") as mock_send:
+            # Call packet_handler function with a packet
+            packet = (
+                Ether()
+                / IP(src="192.168.1.10")
+                / ICMP()
+                / Raw(load=b"Sent from NFQ to WOL")
+            )
+            packet_handler(1, test_config["hosts"], packet)
+
+            # Assert that ping function is not called
+            assert not mock_sr1.called
 
             # Assert that send function is not called
             assert not mock_send.called
@@ -187,17 +217,18 @@ def test_ping_fails_wol_sent(datafiles):
 
     # Mocking sr1 function to simulate ping failure
     with patch("nfq_to_wol.main.sr1") as mock_sr1:
-        mock_sr1.return_value = False  # Simulate failed ping response
+        mock_sr1.return_value = None  # Simulate failed ping response
 
         # Mocking send function
         with patch("nfq_to_wol.main.send") as mock_send:
             # Call packet_handler function with a packet
-            packet = Ether() / IP(dst="192.168.1.10") / TCP(dport=80)
+            packet = IP(dst="192.168.1.10") / TCP(dport=80)
             packet_handler(1, test_config["hosts"], packet)
 
             # Assert that send function is called with correct arguments
             mock_send.assert_called_once_with(
-                IP(dst="255.255.255.255")
+                Ether()
+                / IP(dst="255.255.255.255")
                 / UDP(dport=9)
                 / Raw(load=bytes.fromhex("FFFFFFFFFFFF" + 16 * "001122334455")),
             )

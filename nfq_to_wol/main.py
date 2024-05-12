@@ -31,8 +31,9 @@ def send_wol(mac_address):
         raise ValueError("Incorrect MAC address format - given: {}".format(mac_address))
 
     logger.info("Sending WOL, targeting MAC: {}".format(mac_address))
-    sendp(
-        IP(dst="255.255.255.255")
+    send(
+        Ether()
+        / IP(dst="255.255.255.255")
         / UDP(dport=9)
         / Raw(load=bytes.fromhex("F" * 12 + valid_mac_address * 16))
     )
@@ -53,11 +54,11 @@ def packet_handler(ping_timeout, hosts, packet):
     if daddr and daddr in hosts:
         logger.debug("pinging with timeout: {}".format(ping_timeout))
         ping_result = sr1(
-            IP(dst=daddr) / ICMP() / Raw(load=we_sent_it_id),
+            Ether() / IP(dst=daddr) / ICMP() / Raw(load=we_sent_it_id),
             timeout=ping_timeout,
         )
         logger.debug("ping_results: {}".format(ping_result))
-        if ping_result is None or ping_result[IP].src != daddr:
+        if not ping_result or ping_result[IP].src != daddr:
             logger.debug("Found sleeping daddr: {}".format(daddr))
             logger.info("Sending WOL, because of packet: {}".format(packet))
             send_wol(hosts[daddr])
