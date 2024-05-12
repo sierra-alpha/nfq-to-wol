@@ -61,12 +61,15 @@ NFQ to WOL can be invoked from the command line with optional arguments:
 
 .. code-block:: bash
 
-   nfq-to-wol [--config-file CONFIG_FILE] [--ping-timeout PING_TIMEOUT]
+   Usage: nfq-to-wol [OPTIONS]
 
-Optional Arguments:
+   Options:
+     --config-file TEXT              Path to config file.
+     --ping-timeout FLOAT            Timeout for ping checks in seconds.
+     --log-level [DEBUG|INFO|WARNING|ERROR|CRITICAL]
+                                     Log level for output.
+     --help                          Show this message and exit.
 
-- ``--config-file CONFIG_FILE``: Path to the YAML config file. Default: ``/etc/nfq-to-wol.yaml``.
-- ``--ping-timeout PING_TIMEOUT``: Timeout for ping checks in seconds. Default: ``1``.
 
 Configuration
 -------------

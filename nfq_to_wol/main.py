@@ -64,35 +64,26 @@ def packet_handler(ping_timeout, hosts, packet):
             send_wol(hosts[daddr])
 
 
-def validate_log_level(ctx, param, value):
-    debug_levels = "DEBUG INFO WARNING ERROR CRITICAL".split()
-    if value.upper() in debug_levels:
-        return value.upper()
-
-    raise click.BadParameter(
-        "format must be one of {}.".format(", ".join(debug_levels))
-    )
-
-
 @click.command()
 @click.option(
     "--config-file",
     type=str,
     default="/etc/nfq-to-wol.yaml",
-    help="Path to config file",
+    help="Path to config file.",
 )
 @click.option(
-    "--ping-timeout", type=float, default=1, help="Timeout for ping checks in seconds"
+    "--ping-timeout", type=float, default=1, help="Timeout for ping checks in seconds."
 )
 @click.option(
     "--log-level",
-    type=str,
-    callback=validate_log_level,
+    type=click.Choice(
+        "DEBUG INFO WARNING ERROR CRITICAL".split(), case_sensitive=False
+    ),
     default="WARNING",
-    help="Log level for output",
+    help="Log level for output.",
 )
 def main(config_file, ping_timeout, log_level):
-    logging.basicConfig(format="%(levelname)s: %(message)s", level=log_level)
+    logging.basicConfig(format="%(levelname)s: %(message)s", level=log_level.upper())
     config_data = load_config(config_file)
 
     if (
