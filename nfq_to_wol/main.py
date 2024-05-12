@@ -29,6 +29,7 @@ def send_wol(mac_address):
             "Incorrect MAC address format - given: {}".format(mac_address)
         )
 
+    print("Sending WOL, targeting MAC: {}".format(mac_address))
     send(
         IP(dst="255.255.255.255")
         / UDP(dport=9)
@@ -40,6 +41,7 @@ def packet_handler(ping_timeout, hosts, packet):
     daddr = packet[IP].dst if IP in packet else None
     if daddr and daddr in hosts:
         if not sr1(IP(dst=daddr), timeout=ping_timeout):
+            print("Found sleeping daddr: {}".format(daddr))
             send_wol(hosts[daddr])
 
 
