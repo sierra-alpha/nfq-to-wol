@@ -25,9 +25,7 @@ def send_wol(mac_address):
     )
 
     if not valid_mac_address:
-        raise ValueError(
-            "Incorrect MAC address format - given: {}".format(mac_address)
-        )
+        raise ValueError("Incorrect MAC address format - given: {}".format(mac_address))
 
     print("Sending WOL, targeting MAC: {}".format(mac_address))
     sendp(
@@ -38,11 +36,21 @@ def send_wol(mac_address):
 
 
 def packet_handler(ping_timeout, hosts, packet):
-    daddr = packet[IP].dst if IP in packet else packet[ARP].pdst if ARP in packet else None
-    print("Searching for {}".format(daddr))
+    daddr = (
+        None
+        if Raw in packet and packet[Raw].load == b"Sent from NFQ to WOL"
+        else packet[IP].dst if IP in packet
+        else packet[ARP].pdst if ARP in packet
+        else None
+    )
+    print("Searching or skipping for {}".format(daddr))
     if daddr and daddr in hosts:
-        ping_result = sr1(IP(dst=daddr), timeout=ping_timeout)
-        print("test_results: {}".format(ping_result))
+        print("pinging with timeout: {}".format(ping_timeout))
+        ping_result = sr1(
+            IP(dst=daddr) / ICMP() / Raw(load=b"Sent from NFQ to WOL"),
+            timeout=ping_timeout,
+        )
+        print("ping_results: {}".format(ping_result))
         if ping_result is None or ping_result[IP].src != daddr:
             print("Found sleeping daddr: {}".format(daddr))
             send_wol(hosts[daddr])
@@ -63,9 +71,9 @@ def main(config_file, ping_timeout):
 
     if (
         click.get_current_context().get_parameter_source("ping-timeout")
-        != ParameterSource.DEFAULT
+        == ParameterSource.DEFAULT
     ):
-        config_data["ping-timeout"] = ping_timeout
+        ping_timeout = config_data.get("ping-timeout", ping_timeout)
 
     hosts = config_data.get("hosts", {})
 
@@ -75,9 +83,11 @@ def main(config_file, ping_timeout):
             "for usage requirements."
         )
 
-    callback = partial(packet_handler, config_data["ping-timeout"], hosts)
+    callback = partial(packet_handler, ping_timeout, hosts)
 
-    sniff_filter = "arp net {hosts} or dst {hosts}".format(hosts = " or ".join(hosts))
+    sniff_filter = "not icmp and dst net {hosts}".format(
+        hosts=" or ".join(hosts)
+    )
     print("Using filter: {}".format(sniff_filter))
 
     sniff(filter=sniff_filter, prn=callback)
