@@ -36,9 +36,10 @@ def send_wol(mac_address):
 
 
 def packet_handler(ping_timeout, hosts, packet):
+    we_sent_it_id = b"Sent from NFQ to WOL"
     daddr = (
         None
-        if Raw in packet and packet[Raw].load == b"Sent from NFQ to WOL"
+        if Raw in packet and packet[Raw].load == we_sent_it_id
         else packet[IP].dst if IP in packet
         else packet[ARP].pdst if ARP in packet
         else None
@@ -47,10 +48,10 @@ def packet_handler(ping_timeout, hosts, packet):
     if daddr and daddr in hosts:
         print("pinging with timeout: {}".format(ping_timeout))
         ping_result = sr1(
-            IP(dst=daddr) / ICMP() / Raw(load=b"Sent from NFQ to WOL"),
+            IP(dst=daddr) / ICMP() / Raw(load=we_sent_it_id),
             timeout=ping_timeout,
         )
-        print("ping_results: {}".format(ping_result))
+        print("ping_results: {}".format(ping_result[Raw].load))
         if ping_result is None or ping_result[IP].src != daddr:
             print("Found sleeping daddr: {}".format(daddr))
             send_wol(hosts[daddr])
@@ -85,7 +86,7 @@ def main(config_file, ping_timeout):
 
     callback = partial(packet_handler, ping_timeout, hosts)
 
-    sniff_filter = "not icmp and dst net {hosts}".format(
+    sniff_filter = "dst net {hosts}".format(
         hosts=" or ".join(hosts)
     )
     print("Using filter: {}".format(sniff_filter))
