@@ -1,8 +1,11 @@
 from click.core import ParameterSource
+from functools import partial
 from scapy.all import *
 import click
+import logging
 import yaml
-from functools import partial
+
+logger = logging.getLogger(__name__)
 
 
 def load_config(file_path):
@@ -27,7 +30,7 @@ def send_wol(mac_address):
     if not valid_mac_address:
         raise ValueError("Incorrect MAC address format - given: {}".format(mac_address))
 
-    print("Sending WOL, targeting MAC: {}".format(mac_address))
+    logger.info("Sending WOL, targeting MAC: {}".format(mac_address))
     sendp(
         IP(dst="255.255.255.255")
         / UDP(dport=9)
@@ -40,21 +43,34 @@ def packet_handler(ping_timeout, hosts, packet):
     daddr = (
         None
         if Raw in packet and packet[Raw].load == we_sent_it_id
-        else packet[IP].dst if IP in packet
-        else packet[ARP].pdst if ARP in packet
+        else packet[IP].dst
+        if IP in packet
+        else packet[ARP].pdst
+        if ARP in packet
         else None
     )
-    print("Searching or skipping for {}".format(daddr))
+    logger.debug("Searching or skipping for {}".format(daddr))
     if daddr and daddr in hosts:
-        print("pinging with timeout: {}".format(ping_timeout))
+        logger.debug("pinging with timeout: {}".format(ping_timeout))
         ping_result = sr1(
             IP(dst=daddr) / ICMP() / Raw(load=we_sent_it_id),
             timeout=ping_timeout,
         )
-        print("ping_results: {}".format(ping_result[Raw].load))
+        logger.debug("ping_results: {}".format(ping_result))
         if ping_result is None or ping_result[IP].src != daddr:
-            print("Found sleeping daddr: {}".format(daddr))
+            logger.debug("Found sleeping daddr: {}".format(daddr))
+            logger.info("Sending WOL, because of packet: {}".format(packet))
             send_wol(hosts[daddr])
+
+
+def validate_log_level(ctx, param, value):
+    debug_levels = "DEBUG INFO WARNING ERROR CRITICAL".split()
+    if value.upper() in debug_levels:
+        return value.upper()
+
+    raise click.BadParameter(
+        "format must be one of {}.".format(", ".join(debug_levels))
+    )
 
 
 @click.command()
@@ -67,7 +83,15 @@ def packet_handler(ping_timeout, hosts, packet):
 @click.option(
     "--ping-timeout", type=float, default=1, help="Timeout for ping checks in seconds"
 )
-def main(config_file, ping_timeout):
+@click.option(
+    "--log-level",
+    type=str,
+    callback=validate_log_level,
+    default="WARNING",
+    help="Log level for output",
+)
+def main(config_file, ping_timeout, log_level):
+    logging.basicConfig(format="%(levelname)s: %(message)s", level=log_level)
     config_data = load_config(config_file)
 
     if (
@@ -86,10 +110,8 @@ def main(config_file, ping_timeout):
 
     callback = partial(packet_handler, ping_timeout, hosts)
 
-    sniff_filter = "dst net {hosts}".format(
-        hosts=" or ".join(hosts)
-    )
-    print("Using filter: {}".format(sniff_filter))
+    sniff_filter = "dst net {hosts}".format(hosts=" or ".join(hosts))
+    logger.info("Using filter: {}".format(sniff_filter))
 
     sniff(filter=sniff_filter, prn=callback)
 
