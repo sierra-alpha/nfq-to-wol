@@ -54,7 +54,7 @@ def packet_handler(ping_timeout, hosts, packet):
     if daddr and daddr in hosts:
         logger.debug("pinging with timeout: {}".format(ping_timeout))
         ping_result = sr1(
-            Ether() / IP(dst=daddr) / ICMP() / Raw(load=we_sent_it_id),
+            IP(dst=daddr) / ICMP() / Raw(load=we_sent_it_id),
             timeout=ping_timeout,
         )
         logger.debug("ping_results: {}".format(ping_result))
