@@ -42,7 +42,7 @@ def send_wol(mac_address):
 def packet_handler(ping_timeout, hosts, packet):
     we_sent_it_id = b"Sent from NFQ to WOL"
     daddr = (
-        None
+        we_sent_it_id
         if Raw in packet and packet[Raw].load == we_sent_it_id
         else packet[IP].dst
         if IP in packet
@@ -50,8 +50,9 @@ def packet_handler(ping_timeout, hosts, packet):
         if ARP in packet
         else None
     )
-    logger.debug("Searching or skipping for {}".format(daddr))
-    if daddr and daddr in hosts:
+    logger.debug("Searching in configured hosts - daddr: {}, packet {}".format(daddr, packet))
+    if daddr and daddr != we_sent_it_id and daddr in hosts:
+        logger.debug("Found host - daddr: {}".format(daddr))
         logger.debug("pinging with timeout: {}".format(ping_timeout))
         ping_result = sr1(
             IP(dst=daddr) / ICMP() / Raw(load=we_sent_it_id),
@@ -62,6 +63,8 @@ def packet_handler(ping_timeout, hosts, packet):
             logger.debug("Found sleeping daddr: {}".format(daddr))
             logger.info("Sending WOL, because of packet: {}".format(packet))
             send_wol(hosts[daddr])
+    else:
+        logger.debug("Skipped - daddr: {}".format(daddr, packet))
 
 
 @click.command()
