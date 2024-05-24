@@ -1,4 +1,4 @@
-from nfq_to_wol.main import load_config, send_wol, packet_handler, main
+from nfq_to_wol.main import consumer, load_config, send_wol, packet_handler, main
 from click.testing import CliRunner
 from scapy.all import *
 import pytest
@@ -21,24 +21,31 @@ def test_cli_args_overwrite_config(datafiles):
     runner = CliRunner()
 
     with patch("nfq_to_wol.main.sniff") as mock_sniff:
-        with patch("nfq_to_wol.main.partial") as mock_partial:
-            result = runner.invoke(
-                main,
-                [
-                    "--config-file",
-                    str(datafiles / "test_config.yaml"),
-                    "--ping-timeout",
-                    "1",
-                ],
-            )
+        with patch("nfq_to_wol.main.SimpleQueue") as mock_SimpleQueue:
+            with patch("nfq_to_wol.main.Process") as mock_Process:
+                with patch("nfq_to_wol.main.consumer") as mock_consumer:
+                    result = runner.invoke(
+                        main,
+                        [
+                            "--config-file",
+                            str(datafiles / "test_config.yaml"),
+                            "--ping-timeout",
+                            "1",
+                        ],
+                    )
 
-            # Assert that partial function is called with correct arguments
-            mock_partial.assert_called_once_with(
-                packet_handler, 1, test_config["hosts"]
-            )
+                    # Assert that Process function is called with correct arguments
+                    mock_Process.assert_called_once_with(
+                        target=mock_consumer,
+                        args=(mock_SimpleQueue(), 1.0, test_config["hosts"]),
+                    )
 
-            # Assert that sniff function is called with correct arguments
-            mock_sniff.assert_called_once_with(filter="dst net 192.168.1.10", prn=ANY)
+                    # Assert that sniff function is called with correct arguments
+                    mock_sniff.assert_called_once_with(
+                        filter="dst net 192.168.1.10",
+                        prn=mock_SimpleQueue().put,
+                        store=False,
+                    )
 
 
 # Check that we can deal with multi hosts (and default ping timeout of 1)
@@ -48,24 +55,29 @@ def test_mulitple_hosts_bpf(datafiles):
     runner = CliRunner()
 
     with patch("nfq_to_wol.main.sniff") as mock_sniff:
-        with patch("nfq_to_wol.main.partial") as mock_partial:
-            result = runner.invoke(
-                main,
-                [
-                    "--config-file",
-                    str(datafiles / "multi_hosts_config.yaml"),
-                ],
-            )
+        with patch("nfq_to_wol.main.SimpleQueue") as mock_SimpleQueue:
+            with patch("nfq_to_wol.main.Process") as mock_Process:
+                with patch("nfq_to_wol.main.consumer") as mock_consumer:
+                    result = runner.invoke(
+                        main,
+                        [
+                            "--config-file",
+                            str(datafiles / "multi_hosts_config.yaml"),
+                        ],
+                    )
 
-            # Assert that partial function is called with correct arguments
-            mock_partial.assert_called_once_with(
-                packet_handler, 1, multi_hosts_config["hosts"]
-            )
+                    # Assert that Process function is called with correct arguments
+                    mock_Process.assert_called_once_with(
+                        target=mock_consumer,
+                        args=(mock_SimpleQueue(), 1.0, multi_hosts_config["hosts"]),
+                    )
 
-            # Assert that sniff function is called with correct arguments
-            mock_sniff.assert_called_once_with(
-                filter="dst net 192.168.1.10 or 192.168.1.11 or 192.168.1.12", prn=ANY
-            )
+                    # Assert that sniff function is called with correct arguments
+                    mock_sniff.assert_called_once_with(
+                        filter="dst net 192.168.1.10 or 192.168.1.11 or 192.168.1.12",
+                        prn=mock_SimpleQueue().put,
+                        store=False,
+                    )
 
 
 # Check if config file with no CLI overides is read in correctly
@@ -73,7 +85,7 @@ def test_mulitple_hosts_bpf(datafiles):
 def test_correct_config_load(datafiles):
     test_config = load_config(datafiles / "test_config.yaml")
     assert test_config == {
-        "ping_timeout": 22,
+        "ping-timeout": 22,
         "hosts": {"192.168.1.10": "00:11:22:33:44:55"},
     }
 
