@@ -12,6 +12,7 @@ MULTI_HOSTS_CONFIG_DATAFILE = pytest.mark.datafiles(
 )
 EMPTY_CONFIG_DATAFILE = pytest.mark.datafiles(FIXTURE_DIR / "empty_config.yaml")
 
+WE_SENT_IT_ID = b"Sent by NFQ to WOL"
 
 # Check if CLI args overwrite config file values (even if they are the same as
 # the default)
@@ -154,7 +155,7 @@ def test_non_ip_packet(datafiles):
 
         # Call packet_handler function with a packet
         packet = Ether() / ICMP()  # not an IP packet
-        packet_handler(1, test_config["hosts"], packet)
+        packet_handler(1, test_config["hosts"], packet, WE_SENT_IT_ID)
 
         # Assert that sr1 function is not called
         assert not mock_sr1.called
@@ -170,7 +171,7 @@ def test_ip_packet_dst_not_in_hosts(datafiles):
 
         # Call packet_handler function with a packet
         packet = Ether() / IP(dst="192.168.1.12") / TCP(dport=80)  # not in host file
-        packet_handler(1, test_config["hosts"], packet)
+        packet_handler(1, test_config["hosts"], packet, WE_SENT_IT_ID)
 
         # Assert that sr1 function is not called
         assert not mock_sr1.called
@@ -190,7 +191,7 @@ def test_ping_successful(datafiles):
         with patch("nfq_to_wol.main.send") as mock_send:
             # Call packet_handler function with a packet
             packet = IP(dst="192.168.1.10") / TCP(dport=80)
-            packet_handler(1, test_config["hosts"], packet)
+            packet_handler(1, test_config["hosts"], packet, WE_SENT_IT_ID)
 
             # Assert that send function is not called
             assert not mock_send.called
@@ -211,9 +212,9 @@ def test_self_originated_packet_ignored(datafiles):
                 Ether()
                 / IP(src="192.168.1.10")
                 / ICMP()
-                / Raw(load=b"Sent from NFQ to WOL")
+                / Raw(load=WE_SENT_IT_ID)
             )
-            packet_handler(1, test_config["hosts"], packet)
+            packet_handler(1, test_config["hosts"], packet, WE_SENT_IT_ID)
 
             # Assert that ping function is not called
             assert not mock_sr1.called
@@ -235,7 +236,7 @@ def test_ping_fails_wol_sent(datafiles):
         with patch("nfq_to_wol.main.send") as mock_send:
             # Call packet_handler function with a packet
             packet = IP(dst="192.168.1.10") / TCP(dport=80)
-            packet_handler(1, test_config["hosts"], packet)
+            packet_handler(1, test_config["hosts"], packet, WE_SENT_IT_ID)
 
             # Assert that send function is called with correct arguments
             mock_send.assert_called_once_with(
