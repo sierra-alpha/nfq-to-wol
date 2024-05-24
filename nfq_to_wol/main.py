@@ -45,21 +45,22 @@ def send_wol(mac_address):
     )
 
 
-def packet_handler(ping_timeout, hosts, packet):
-    we_sent_it_id = b"Sent from NFQ to WOL"
+def we_sent_it(packet, we_sent_it_id):
+    load = Raw in packet and packet[Raw].load
+    result = load == we_sent_it_id
+    logger.debug("In we_sent_it, Raw load is {}, we_sent_it? {}".format(load, result))
+    return result
+
+
+def packet_handler(ping_timeout, hosts, packet, we_sent_it_id):
+    logger.debug("In packet_handler, got packet: {}".format(packet))
     daddr = (
-        we_sent_it_id
-        if Raw in packet and packet[Raw].load == we_sent_it_id
-        else (
-            packet[IP].dst
-            if IP in packet
-            else packet[ARP].pdst if ARP in packet else None
-        )
+        packet[IP].dst if IP in packet else packet[ARP].pdst if ARP in packet else None
     )
     logger.debug(
         "Searching in configured hosts - daddr: {}, packet {}".format(daddr, packet)
     )
-    if daddr and daddr != we_sent_it_id and daddr in hosts:
+    if not we_sent_it(packet, we_sent_it_id) and hosts.get(daddr):
         logger.debug("Found host - daddr: {}".format(daddr))
         logger.debug("pinging with timeout: {}".format(ping_timeout))
         ping_result = sr1(
@@ -77,10 +78,22 @@ def packet_handler(ping_timeout, hosts, packet):
 
 def consumer(q, ping_timeout, hosts):
     logger.info("Starting consumer background process")
-    with ProcessPoolExecutor() as worker:
-        while True:
-            pkt = q.get()
-            worker.map(packet_handler, (ping_timeout, hosts, pkt, q))
+    we_sent_it_id = b"Sent by NFQ to WOL"
+    try:
+        with ProcessPoolExecutor() as worker:
+            while True:
+                pkt = q.get()
+                logger.debug("In consumer, got packet: {}".format(pkt))
+                if not we_sent_it(pkt, we_sent_it_id):
+                    logger.debug("In consumer, starting worker")
+                    future = worker.submit(
+                        packet_handler, ping_timeout, hosts, pkt, we_sent_it_id
+                    )
+                    future.result()
+                else:
+                    logger.info("In consumer, ignoring a packet that we sent")
+    except KeyboardInterrupt:
+        logger.info("KeyboardInterrupt, exiting gracefully.")
 
 
 @click.command()
