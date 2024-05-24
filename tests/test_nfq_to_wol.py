@@ -1,4 +1,4 @@
-from nfq_to_wol.main import load_config, send_wol, packet_handler, main
+from nfq_to_wol.main import consumer, load_config, send_wol, packet_handler, main
 from click.testing import CliRunner
 from scapy.all import *
 import pytest
@@ -12,6 +12,7 @@ MULTI_HOSTS_CONFIG_DATAFILE = pytest.mark.datafiles(
 )
 EMPTY_CONFIG_DATAFILE = pytest.mark.datafiles(FIXTURE_DIR / "empty_config.yaml")
 
+WE_SENT_IT_ID = b"Sent by NFQ to WOL"
 
 # Check if CLI args overwrite config file values (even if they are the same as
 # the default)
@@ -21,24 +22,31 @@ def test_cli_args_overwrite_config(datafiles):
     runner = CliRunner()
 
     with patch("nfq_to_wol.main.sniff") as mock_sniff:
-        with patch("nfq_to_wol.main.partial") as mock_partial:
-            result = runner.invoke(
-                main,
-                [
-                    "--config-file",
-                    str(datafiles / "test_config.yaml"),
-                    "--ping-timeout",
-                    "1",
-                ],
-            )
+        with patch("nfq_to_wol.main.SimpleQueue") as mock_SimpleQueue:
+            with patch("nfq_to_wol.main.Process") as mock_Process:
+                with patch("nfq_to_wol.main.consumer") as mock_consumer:
+                    result = runner.invoke(
+                        main,
+                        [
+                            "--config-file",
+                            str(datafiles / "test_config.yaml"),
+                            "--ping-timeout",
+                            "1",
+                        ],
+                    )
 
-            # Assert that partial function is called with correct arguments
-            mock_partial.assert_called_once_with(
-                packet_handler, 1, test_config["hosts"]
-            )
+                    # Assert that Process function is called with correct arguments
+                    mock_Process.assert_called_once_with(
+                        target=mock_consumer,
+                        args=(mock_SimpleQueue(), 1.0, test_config["hosts"]),
+                    )
 
-            # Assert that sniff function is called with correct arguments
-            mock_sniff.assert_called_once_with(filter="dst net 192.168.1.10", prn=ANY)
+                    # Assert that sniff function is called with correct arguments
+                    mock_sniff.assert_called_once_with(
+                        filter="dst net 192.168.1.10",
+                        prn=mock_SimpleQueue().put,
+                        store=False,
+                    )
 
 
 # Check that we can deal with multi hosts (and default ping timeout of 1)
@@ -48,24 +56,29 @@ def test_mulitple_hosts_bpf(datafiles):
     runner = CliRunner()
 
     with patch("nfq_to_wol.main.sniff") as mock_sniff:
-        with patch("nfq_to_wol.main.partial") as mock_partial:
-            result = runner.invoke(
-                main,
-                [
-                    "--config-file",
-                    str(datafiles / "multi_hosts_config.yaml"),
-                ],
-            )
+        with patch("nfq_to_wol.main.SimpleQueue") as mock_SimpleQueue:
+            with patch("nfq_to_wol.main.Process") as mock_Process:
+                with patch("nfq_to_wol.main.consumer") as mock_consumer:
+                    result = runner.invoke(
+                        main,
+                        [
+                            "--config-file",
+                            str(datafiles / "multi_hosts_config.yaml"),
+                        ],
+                    )
 
-            # Assert that partial function is called with correct arguments
-            mock_partial.assert_called_once_with(
-                packet_handler, 1, multi_hosts_config["hosts"]
-            )
+                    # Assert that Process function is called with correct arguments
+                    mock_Process.assert_called_once_with(
+                        target=mock_consumer,
+                        args=(mock_SimpleQueue(), 1.0, multi_hosts_config["hosts"]),
+                    )
 
-            # Assert that sniff function is called with correct arguments
-            mock_sniff.assert_called_once_with(
-                filter="dst net 192.168.1.10 or 192.168.1.11 or 192.168.1.12", prn=ANY
-            )
+                    # Assert that sniff function is called with correct arguments
+                    mock_sniff.assert_called_once_with(
+                        filter="dst net 192.168.1.10 or 192.168.1.11 or 192.168.1.12",
+                        prn=mock_SimpleQueue().put,
+                        store=False,
+                    )
 
 
 # Check if config file with no CLI overides is read in correctly
@@ -73,7 +86,7 @@ def test_mulitple_hosts_bpf(datafiles):
 def test_correct_config_load(datafiles):
     test_config = load_config(datafiles / "test_config.yaml")
     assert test_config == {
-        "ping_timeout": 22,
+        "ping-timeout": 22,
         "hosts": {"192.168.1.10": "00:11:22:33:44:55"},
     }
 
@@ -142,7 +155,7 @@ def test_non_ip_packet(datafiles):
 
         # Call packet_handler function with a packet
         packet = Ether() / ICMP()  # not an IP packet
-        packet_handler(1, test_config["hosts"], packet)
+        packet_handler(1, test_config["hosts"], packet, WE_SENT_IT_ID)
 
         # Assert that sr1 function is not called
         assert not mock_sr1.called
@@ -158,7 +171,7 @@ def test_ip_packet_dst_not_in_hosts(datafiles):
 
         # Call packet_handler function with a packet
         packet = Ether() / IP(dst="192.168.1.12") / TCP(dport=80)  # not in host file
-        packet_handler(1, test_config["hosts"], packet)
+        packet_handler(1, test_config["hosts"], packet, WE_SENT_IT_ID)
 
         # Assert that sr1 function is not called
         assert not mock_sr1.called
@@ -178,7 +191,7 @@ def test_ping_successful(datafiles):
         with patch("nfq_to_wol.main.send") as mock_send:
             # Call packet_handler function with a packet
             packet = IP(dst="192.168.1.10") / TCP(dport=80)
-            packet_handler(1, test_config["hosts"], packet)
+            packet_handler(1, test_config["hosts"], packet, WE_SENT_IT_ID)
 
             # Assert that send function is not called
             assert not mock_send.called
@@ -199,9 +212,9 @@ def test_self_originated_packet_ignored(datafiles):
                 Ether()
                 / IP(src="192.168.1.10")
                 / ICMP()
-                / Raw(load=b"Sent from NFQ to WOL")
+                / Raw(load=WE_SENT_IT_ID)
             )
-            packet_handler(1, test_config["hosts"], packet)
+            packet_handler(1, test_config["hosts"], packet, WE_SENT_IT_ID)
 
             # Assert that ping function is not called
             assert not mock_sr1.called
@@ -223,7 +236,7 @@ def test_ping_fails_wol_sent(datafiles):
         with patch("nfq_to_wol.main.send") as mock_send:
             # Call packet_handler function with a packet
             packet = IP(dst="192.168.1.10") / TCP(dport=80)
-            packet_handler(1, test_config["hosts"], packet)
+            packet_handler(1, test_config["hosts"], packet, WE_SENT_IT_ID)
 
             # Assert that send function is called with correct arguments
             mock_send.assert_called_once_with(
