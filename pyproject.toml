@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "nfq-to-wol"
-version = "0.2.0"
+version = "0.2.1"
 description = "A daemon to check for packets to a certain host and send a WOL if needed"
 authors = ["Shaun Alexander <shaun@sierraalpha.co.nz>"]
 
@@ -17,6 +17,8 @@ PyYAML = "^6.0.1"
 pytest = "^8.2.0"
 black = "^24.4.2"
 pytest-datafiles = "^3.0.0"
+pylint = "^3.2.3"
+autoflake = "^2.3.1"
 
 [tool.pytest.ini_options]
 addopts = [
