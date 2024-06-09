@@ -1,9 +1,17 @@
-from nfq_to_wol.main import consumer, load_config, send_wol, packet_handler, main
+from nfq_to_wol.main import (
+    consumer,
+    load_config,
+    send_wol,
+    packet_handler,
+    main,
+    drain_queue_conditionally,
+)
 from click.testing import CliRunner
 from scapy.all import *
 import pytest
 from pathlib import Path
-from unittest.mock import patch, ANY
+from multiprocessing import Manager
+from unittest.mock import call, patch
 
 FIXTURE_DIR = Path(__file__).parent.resolve()
 TEST_CONFIG_DATAFILE = pytest.mark.datafiles(FIXTURE_DIR / "test_config.yaml")
@@ -14,39 +22,68 @@ EMPTY_CONFIG_DATAFILE = pytest.mark.datafiles(FIXTURE_DIR / "empty_config.yaml")
 
 WE_SENT_IT_ID = b"Sent by NFQ to WOL"
 
+
 # Check if CLI args overwrite config file values (even if they are the same as
-# the default)
+# the default), also checks logging process is setup correctly.
 @TEST_CONFIG_DATAFILE
 def test_cli_args_overwrite_config(datafiles):
     test_config = load_config(datafiles / "test_config.yaml")
     runner = CliRunner()
 
     with patch("nfq_to_wol.main.sniff") as mock_sniff:
-        with patch("nfq_to_wol.main.SimpleQueue") as mock_SimpleQueue:
+        with patch("nfq_to_wol.main.Manager") as mock_Manager:
             with patch("nfq_to_wol.main.Process") as mock_Process:
-                with patch("nfq_to_wol.main.consumer") as mock_consumer:
-                    result = runner.invoke(
-                        main,
-                        [
-                            "--config-file",
-                            str(datafiles / "test_config.yaml"),
-                            "--ping-timeout",
-                            "1",
-                        ],
-                    )
+                with patch("nfq_to_wol.main.logger_process") as mock_logger_process:
+                    with patch("nfq_to_wol.main.consumer") as mock_consumer:
+                        result = runner.invoke(
+                            main,
+                            [
+                                "--config-file",
+                                str(datafiles / "test_config.yaml"),
+                                "--ping-timeout",
+                                "1",
+                            ],
+                        )
 
-                    # Assert that Process function is called with correct arguments
-                    mock_Process.assert_called_once_with(
-                        target=mock_consumer,
-                        args=(mock_SimpleQueue(), 1.0, test_config["hosts"]),
-                    )
+                        mock_Process_calls = [
+                            # Assert that logging Process function is called
+                            # with correct arguments
+                            #
+                            call(
+                                target=mock_logger_process,
+                                args=(mock_Manager().Queue(), "WARNING"),
+                            ),
+                            call().start(),
+                            # Assert that Process function is called with
+                            # correct arguments
+                            #
+                            call(
+                                target=mock_consumer,
+                                args=(
+                                    mock_Manager().Queue(),
+                                    1.0,
+                                    test_config["hosts"],
+                                ),
+                                kwargs=(
+                                    {
+                                        "log_q": mock_Manager().Queue(),
+                                        "log_level": "WARNING",
+                                    }
+                                ),
+                            ),
+                            call().start(),
+                            call().join(),
+                        ]
 
-                    # Assert that sniff function is called with correct arguments
-                    mock_sniff.assert_called_once_with(
-                        filter="dst net 192.168.1.10",
-                        prn=mock_SimpleQueue().put,
-                        store=False,
-                    )
+                        mock_Process.assert_has_calls(mock_Process_calls)
+
+                        # Assert that sniff function is called with correct
+                        # arguments
+                        mock_sniff.assert_called_once_with(
+                            filter="dst net 192.168.1.10",
+                            prn=mock_Manager().Queue().put,
+                            store=False,
+                        )
 
 
 # Check that we can deal with multi hosts (and default ping timeout of 1)
@@ -56,7 +93,7 @@ def test_mulitple_hosts_bpf(datafiles):
     runner = CliRunner()
 
     with patch("nfq_to_wol.main.sniff") as mock_sniff:
-        with patch("nfq_to_wol.main.SimpleQueue") as mock_SimpleQueue:
+        with patch("nfq_to_wol.main.Manager") as mock_Manager:
             with patch("nfq_to_wol.main.Process") as mock_Process:
                 with patch("nfq_to_wol.main.consumer") as mock_consumer:
                     result = runner.invoke(
@@ -68,15 +105,25 @@ def test_mulitple_hosts_bpf(datafiles):
                     )
 
                     # Assert that Process function is called with correct arguments
-                    mock_Process.assert_called_once_with(
+                    mock_Process.assert_called_with(
                         target=mock_consumer,
-                        args=(mock_SimpleQueue(), 1.0, multi_hosts_config["hosts"]),
+                        args=(
+                            mock_Manager().Queue(),
+                            1.0,
+                            multi_hosts_config["hosts"],
+                        ),
+                        kwargs=(
+                            {
+                                "log_q": mock_Manager().Queue(),
+                                "log_level": "WARNING",
+                            }
+                        ),
                     )
 
                     # Assert that sniff function is called with correct arguments
                     mock_sniff.assert_called_once_with(
                         filter="dst net 192.168.1.10 or 192.168.1.11 or 192.168.1.12",
-                        prn=mock_SimpleQueue().put,
+                        prn=mock_Manager().Queue().put,
                         store=False,
                     )
 
@@ -155,7 +202,9 @@ def test_non_ip_packet(datafiles):
 
         # Call packet_handler function with a packet
         packet = Ether() / ICMP()  # not an IP packet
-        packet_handler(1, test_config["hosts"], packet, WE_SENT_IT_ID)
+        packet_handler(
+            Manager().Queue(), 1, test_config["hosts"], packet, WE_SENT_IT_ID
+        )
 
         # Assert that sr1 function is not called
         assert not mock_sr1.called
@@ -171,7 +220,9 @@ def test_ip_packet_dst_not_in_hosts(datafiles):
 
         # Call packet_handler function with a packet
         packet = Ether() / IP(dst="192.168.1.12") / TCP(dport=80)  # not in host file
-        packet_handler(1, test_config["hosts"], packet, WE_SENT_IT_ID)
+        packet_handler(
+            Manager().Queue(), 1, test_config["hosts"], packet, WE_SENT_IT_ID
+        )
 
         # Assert that sr1 function is not called
         assert not mock_sr1.called
@@ -191,7 +242,9 @@ def test_ping_successful(datafiles):
         with patch("nfq_to_wol.main.send") as mock_send:
             # Call packet_handler function with a packet
             packet = IP(dst="192.168.1.10") / TCP(dport=80)
-            packet_handler(1, test_config["hosts"], packet, WE_SENT_IT_ID)
+            packet_handler(
+                Manager().Queue(), 1, test_config["hosts"], packet, WE_SENT_IT_ID
+            )
 
             # Assert that send function is not called
             assert not mock_send.called
@@ -208,13 +261,10 @@ def test_self_originated_packet_ignored(datafiles):
         # Mocking send function
         with patch("nfq_to_wol.main.send") as mock_send:
             # Call packet_handler function with a packet
-            packet = (
-                Ether()
-                / IP(src="192.168.1.10")
-                / ICMP()
-                / Raw(load=WE_SENT_IT_ID)
+            packet = Ether() / IP(src="192.168.1.10") / ICMP() / Raw(load=WE_SENT_IT_ID)
+            packet_handler(
+                Manager().Queue(), 1, test_config["hosts"], packet, WE_SENT_IT_ID
             )
-            packet_handler(1, test_config["hosts"], packet, WE_SENT_IT_ID)
 
             # Assert that ping function is not called
             assert not mock_sr1.called
@@ -236,7 +286,9 @@ def test_ping_fails_wol_sent(datafiles):
         with patch("nfq_to_wol.main.send") as mock_send:
             # Call packet_handler function with a packet
             packet = IP(dst="192.168.1.10") / TCP(dport=80)
-            packet_handler(1, test_config["hosts"], packet, WE_SENT_IT_ID)
+            packet_handler(
+                Manager().Queue(), 1, test_config["hosts"], packet, WE_SENT_IT_ID
+            )
 
             # Assert that send function is called with correct arguments
             mock_send.assert_called_once_with(
@@ -245,3 +297,141 @@ def test_ping_fails_wol_sent(datafiles):
                 / UDP(dport=9)
                 / Raw(load=bytes.fromhex("FFFFFFFFFFFF" + 16 * "001122334455")),
             )
+
+
+def ip(suffix):
+    return "192.168.1.{}".format(suffix)
+
+
+# Check if we drain q as required
+@pytest.mark.parametrize(
+    "queue_items,kwargs,result",
+    [
+        (
+            [ip(1), ip(2), ip(3), ip(4), ip(5)],
+            {
+                "hosts": {ip(2): "mock", ip(4): "mock"},
+                "drain_host_ip": ip(2),
+                "drain_all": False,
+            },
+            [ip(4)],
+        ),
+        (
+            [ip(1), ip(2), ip(3), ip(4), ip(2), ip(2), ip(2), ip(4), ip(2), ip(5)],
+            {
+                "hosts": {ip(2): "mock", ip(4): "mock"},
+                "drain_host_ip": ip(2),
+                "drain_all": False,
+            },
+            [ip(4), ip(4)],
+        ),
+        (
+            [ip(1), ip(2), ip(3), ip(4), ip(5)],
+            {
+                "hosts": {ip(2): "mock", ip(4): "mock"},
+                "drain_host_ip": ip(2),
+                "drain_all": True,
+            },
+            [],
+        ),
+        (
+            [
+                ip(1),
+                ip(2),
+                ip(3),
+                ip(4),
+                ip(2),
+                ip(1),
+                ip(4),
+                ip(2),
+                ip(2),
+                ip(4),
+                ip(2),
+                ip(5),
+            ],
+            {
+                "hosts": {ip(2): "mock", ip(4): "mock"},
+                "drain_host_ip": None,
+                "drain_all": False,
+            },
+            [
+                ip(2),
+                ip(4),
+                ip(2),
+                ip(4),
+                ip(2),
+                ip(2),
+                ip(4),
+                ip(2),
+            ],
+        ),
+        (
+            [ip(1), ip(2), ip(3), ip(4), ip(5)],
+            {
+                "hosts": {ip(2): "mock", ip(4): "mock"},
+                "drain_host_ip": None,
+                "drain_all": False,
+            },
+            [ip(2), ip(4)],
+        ),
+        (
+            [ip(1), ip(2), ip(3), ip(4), ip(5)],
+            {
+                "hosts": {ip(2): "mock", ip(4): "mock"},
+                "drain_host_ip": None,
+                "drain_all": True,
+            },
+            [],
+        ),
+        (
+            [ip(1), ip(2), None, ip(4), ip(5)],
+            {
+                "hosts": {ip(2): "mock", ip(4): "mock"},
+                "drain_host_ip": None,
+                "drain_all": False,
+            },
+            [None],
+        ),
+        (
+            [ip(1), ip(2), None, ip(4), ip(5)],
+            {
+                "hosts": {ip(2): "mock", ip(4): "mock"},
+                "drain_host_ip": None,
+                "drain_all": True,
+            },
+            [],
+        ),
+        (
+            [None, ip(2), ip(3), ip(4), ip(5)],
+            {
+                "hosts": {ip(2): "mock", ip(4): "mock"},
+                "drain_host_ip": None,
+                "drain_all": False,
+            },
+            [None],
+        ),
+        (
+            [None, ip(2), ip(3), ip(4), ip(5)],
+            {
+                "hosts": {ip(2): "mock", ip(4): "mock"},
+                "drain_host_ip": None,
+                "drain_all": True,
+            },
+            [],
+        ),
+    ],
+)
+def test_queue_draining(queue_items, kwargs, result):
+    def packet_maker(ip):
+        return IP(dst=ip)
+
+    q = Manager().Queue()
+    for item in queue_items:
+        q.put(packet_maker(item) if item else None)
+    drain_queue_conditionally(q, **kwargs)
+    result_items = []
+    while not q.empty():
+        result_item = q.get()
+        result_items.append(result_item[IP].dst if result_item else result_item)
+
+    assert result_items == [packet_maker(ip)[IP].dst if ip else ip for ip in result]
