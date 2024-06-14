@@ -1,11 +1,12 @@
 from click.core import ParameterSource
+from datetime import datetime, timedelta
 from scapy.all import *
 import click
 from logging.handlers import QueueHandler
 import logging
 import yaml
 import signal
-from multiprocessing import Queue, Process, Pool, Manager
+from multiprocessing import Queue, Process, Pool, Manager, Value
 
 
 def logger_process(log_q, log_level="DEBUG"):
@@ -106,7 +107,9 @@ def drain_queue_conditionally(q, hosts, drain_host_ip=None, drain_all=False):
         daddr = (
             packet[IP].dst
             if IP in packet
-            else packet[ARP].pdst if ARP in packet else "Unknown"
+            else packet[ARP].pdst
+            if ARP in packet
+            else "Unknown"
         )
         logger.debug("Draining queue, found daddr - daddr {}".format(daddr))
 
@@ -134,7 +137,14 @@ def drain_queue_conditionally(q, hosts, drain_host_ip=None, drain_all=False):
 
 
 def packet_handler(
-    q, ping_timeout, hosts, packet, we_sent_it_id, log_q=Queue(), log_level="DEBUG"
+    q,
+    ping_timeout,
+    hosts,
+    packet,
+    we_sent_it_id,
+    sliding_win,
+    log_q=Queue(),
+    log_level="DEBUG",
 ):
     logger = create_logger(log_q, log_level, "packet_handler")
     logger.debug("In packet_handler, got packet: {}".format(packet))
@@ -146,20 +156,63 @@ def packet_handler(
     )
     if not we_sent_it(packet, we_sent_it_id) and hosts.get(daddr):
         logger.debug("Found host - daddr: {}".format(daddr))
-        logger.debug("pinging with timeout: {}".format(ping_timeout))
-        ping_result = sr1(
-            IP(dst=daddr) / ICMP() / Raw(load=we_sent_it_id),
-            timeout=ping_timeout,
-        )
-        logger.debug("ping_results: {}".format(ping_result))
-        if not ping_result or ping_result[IP].src != daddr:
-            logger.debug("Found sleeping daddr: {}".format(daddr))
-            logger.info("Sending WOL, because of packet: {}".format(packet))
-            send_wol(hosts[daddr])
-        else:
-            logger.debug("Skipped - daddr: {}".format(daddr, packet))
+        now = datetime.now().timestamp()
+        secs_before_next_ping = sliding_win[daddr]["secs_before_next_ping"].value
+        last_pinged = sliding_win[daddr]["last_pinged"].value
+        if now > last_pinged + secs_before_next_ping:
+            logger.debug(
+                "last ping was too long ago - last_pinged: {}, secs_before_next_ping: {}, now: {}".format(
+                    last_pinged, secs_before_next_ping, now
+                )
+            )
+            logger.debug("pinging with timeout: {}".format(ping_timeout))
+            ping_result = sr1(
+                IP(dst=daddr) / ICMP() / Raw(load=we_sent_it_id),
+                timeout=ping_timeout,
+            )
+            sliding_win[daddr]["last_pinged"].value = datetime.now().timestamp()
+            logger.debug(
+                "After ping - daddr: {}, last_pinged: {}, ping_result: {}".format(
+                    daddr, sliding_win[daddr]["last_pinged"].value, ping_result
+                )
+            )
+            if not ping_result or ping_result[IP].src != daddr:
+                logger.debug("Found sleeping daddr: {}".format(daddr))
 
-            # We only drain the queue on successful ping of a host we're
+                logger.debug("reducing sliding window back to 1 second")
+                sliding_win[daddr]["secs_before_next_ping"].value = ping_timeout
+
+                logger.info("Sending WOL, because of packet: {}".format(packet))
+                send_wol(hosts[daddr])
+            else:
+                sliding_win[daddr]["secs_before_next_ping"].value = min(
+                    sliding_win[daddr]["secs_before_next_ping"].value * 2, 20
+                )
+                logger.debug(
+                    "Skipped because of successful ping - daddr: {}, secs_before_next_ping: {}".format(
+                        daddr, sliding_win[daddr]["secs_before_next_ping"].value
+                    )
+                )
+
+                # We only drain the queue on successful ping of a host we're
+                # interested in
+                #
+                drain_queue_conditionally(q, hosts, daddr)
+
+        else:
+
+            logger.debug(
+                (
+                    "Skipped because of recent successful ping will ping again in {} "
+                    "- daddr: {}, secs_before_next_ping: {}"
+                ).format(
+                    datetime.fromtimestamp(last_pinged + secs_before_next_ping) - datetime.now(),
+                    daddr,
+                    sliding_win[daddr]["secs_before_next_ping"].value,
+                )
+            )
+
+            # We only drain the queue on when we've had a recent ping success of a host we're
             # interested in
             #
             drain_queue_conditionally(q, hosts, daddr)
@@ -178,8 +231,18 @@ def consumer(q, ping_timeout, hosts, log_q=Queue(), log_level="DEBUG"):
     def raise_x(x):
         raise x
 
+    manager = Manager()
+    sliding_win = manager.dict(
+        {
+            host: {
+                "last_pinged": manager.Value("f", datetime.now().timestamp()),
+                "secs_before_next_ping": manager.Value("f", ping_timeout * 2),
+            }
+            for host in hosts
+        }
+    )
     we_sent_it_id = b"Sent by NFQ to WOL"
-    with Pool() as pool:  # start 4 worker processes
+    with Pool() as pool:
         while True:
             pkt = q.get()
             if pkt == None:
@@ -191,7 +254,7 @@ def consumer(q, ping_timeout, hosts, log_q=Queue(), log_level="DEBUG"):
                 logger.debug("In consumer, starting worker")
                 pool.apply_async(
                     packet_handler,
-                    args=(q, ping_timeout, hosts, pkt, we_sent_it_id),
+                    args=(q, ping_timeout, hosts, pkt, we_sent_it_id, sliding_win),
                     kwds=({"log_q": log_q, "log_level": log_level}),
                     error_callback=raise_x,
                 )
