@@ -10,12 +10,12 @@ nfq-to-wol = "nfq_to_wol.main:main"
 [tool.poetry.dependencies]
 python = "^3.10"
 click = "^8.1.7"
-scapy = "^2.5.0"
+scapy = "^2.7.0rc1"
 PyYAML = "^6.0.1"
 
 [tool.poetry.dev-dependencies]
 pytest = "^8.2.0"
-black = "^24.4.2"
+black = "^26.3.1"
 pytest-datafiles = "^3.0.0"
 pylint = "^3.2.3"
 autoflake = "^2.3.1"
